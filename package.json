@@ -1,0 +1,9 @@
+{
+  "name": "brick-breaker-online-99",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "1 vs 99 asymmetric online brick breaker",
+  "scripts": { "start": "node server.js", "dev": "node --watch server.js", "test": "node --test" },
+  "engines": { "node": ">=22" }
+}
