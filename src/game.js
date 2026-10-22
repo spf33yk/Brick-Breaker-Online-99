@@ -73,12 +73,8 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
     b.x = clamp(b.x + dx / length * speed * dt, b.w / 2 + 8, WIDTH - b.w / 2 - 8);
     b.y = clamp(b.y + dy / length * speed * dt, 30, 460);
   }
-  // Queue spawned balls until after collision processing to avoid a same-tick chain reaction.
-  const spawned = [];
   function destroyBlock(b) {
     b.alive = false; game.destroyed++;
-    const angle = game.destroyed * 2.399963;
-    spawned.push({ id: game.nextBallId++, x: b.x, y: b.y, r: 7, vx: Math.cos(angle) * 260, vy: (game.destroyed % 2 ? 1 : -1) * 310 });
   }
   for (const bomb of game.bombs) {
     bomb.life -= dt;
@@ -105,8 +101,6 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
       break;
     }
   }
-  // Every defeat adds a ball, even when the shadow skill's 128-ball limit is reached.
-  game.balls.push(...spawned);
   if (game.destroyed === BLOCK_COUNT) game.winner = 'bar';
   else if (game.remaining <= 0) game.winner = 'block';
 }
