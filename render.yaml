@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: brick-breaker-online-99
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeployTrigger: commit
