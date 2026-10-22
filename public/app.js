@@ -2,6 +2,13 @@ const $ = id => document.getElementById(id);
 const canvas = $('arena'), ctx = canvas.getContext('2d');
 let role = 'bar', color = '#b8f36b', token = null, myId = null, room = null, events = null, connected = false, busy = false;
 let pointerX, keys = new Set(), touchKeys = new Set(), sending = false, lastInput = '', lastSent = 0;
+let previousGame = null, snapshotAt = performance.now(), predicted = null, lastDraw = performance.now(), inviteBase = location.origin;
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+function currentInput() {
+  const down = d => keys.has(d) || touchKeys.has(d);
+  return { x: Number(down('right')) - Number(down('left')), y: Number(down('down')) - Number(down('up')), ...(role === 'bar' && pointerX !== undefined ? { targetX: pointerX } : {}) };
+}
+function invitationUrl() { const url = new URL(inviteBase); if(room) url.searchParams.set('room', room.code); return url.href; }
 const skillData = { bar: [['⧉','影分身','ボールが2倍',20],['✹','ボム','接触した敵を撃破',25]], block: [['♧','ゴースト','10秒間スピードUP',20],['◷','砂時計','5秒間ダメージ無効',30]] };
 const previewBlocks = Array.from({length:99},(_,i)=>({x:54+i%11*89,y:65+Math.floor(i/11)*38,w:46,h:20,alive:true,cpu:true,color:'#fff'}));
 function status(message = '') { $('status').textContent = message; }
@@ -37,7 +44,13 @@ function setConnection(ok, message) { connected=ok; $('connection').textContent=
 function attachEvents() {
   events?.close(); events=new EventSource(`/events?token=${encodeURIComponent(token)}`);
   events.onopen=()=>{setConnection(true,'オンライン');status();renderUI();};
-  events.onmessage=e=>{setConnection(true,'オンライン');room=JSON.parse(e.data); renderUI();};
+  events.onmessage=e=>{
+    setConnection(true,'オンライン');
+    const next = JSON.parse(e.data);
+    previousGame = room?.game?.startedAt === next.game?.startedAt ? room?.game : null;
+    if (!previousGame) predicted = null;
+    room = next; snapshotAt = performance.now(); renderUI();
+  };
   events.onerror=()=>{setConnection(false,'再接続中');renderUI();status('接続が途切れました。自動再接続中です。15秒を超えた場合は退出して再参加してください。');};
 }
 async function enter(type) {
@@ -49,7 +62,7 @@ $('joinForm').onsubmit=e=>{e.preventDefault();action(()=>enter('join'));};
 $('startGame').onclick=()=>action(()=>api('start'));
 $('rematch').onclick=()=>action(()=>api('lobby'));
 $('leaveRoom').onclick=()=>action(async()=>{ try{await api('leave');}finally{events?.close();events=null;token=null;myId=null;room=null;keys.clear();touchKeys.clear();pointerX=undefined;renderUI();status();checkHealth();} });
-$('copyCode').onclick=()=>action(async()=>{const url=new URL(location.href);url.searchParams.set('room',room.code);try{await navigator.clipboard.writeText(url.href);status('招待リンクをコピーしました。');}catch{status(`ルームコード ${room.code} を友達に伝えてください。`);}});
+$('copyCode').onclick=()=>action(async()=>{try{await navigator.clipboard.writeText(invitationUrl());status('招待リンクをコピーしました。同じWi-Fi・LANの相手に共有してください。');}catch{$('inviteUrl').focus();$('inviteUrl').select();status('表示された招待URLをコピーしてください。');}});
 $('duration').onchange=()=>{if(!room)$('timer').textContent=formatTime(Number($('duration').value));};
 $('helpButton').onclick=()=>$('help').showModal();$('closeHelp').onclick=()=>$('help').close();
 function formatTime(seconds){const n=Math.ceil(Math.max(0,seconds));return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`;}
@@ -68,6 +81,7 @@ function renderUI() {
   if(inRoom){
     const host=room.host===myId;
     $('roomCode').textContent=room.code;
+    $('inviteUrl').value=invitationUrl();
     const humans=room.players.filter(p=>p.role==='block').length;
     $('roomPlayers').textContent=`バー ${room.players.some(p=>p.role==='bar')?'1人':'CPU'} · ブロック ${humans}人 + CPU ${99-humans}体`;
     const rosterKey=JSON.stringify(room.players)+room.host;
@@ -77,11 +91,25 @@ function renderUI() {
     if(finished){const win=room.game.winner;$('resultTitle').textContent=win==='bar'?'バーチームの勝利！':'ブロックチームの勝利！';$('resultDetail').textContent=win==='bar'?'99体のブロックをすべて撃破。':`${99-room.game.destroyed}体のブロックが逃げ切りました。`;$('rematch').disabled=!host;$('rematch').textContent=host?'ロビーに戻る ↗':'ホストの操作を待っています';}
   }
   const g=room?.game;
-  $('alive').innerHTML=`${g?99-g.destroyed:99}<small> / 99</small>`;$('destroyed').textContent=String(g?.destroyed??0).padStart(2,'0');$('timer').textContent=formatTime(g?.remaining??Number($('duration').value));
+  $('alive').innerHTML=`${g?99-g.destroyed:99}<small> / 99</small>`;$('destroyed').textContent=String(g?.destroyed??0).padStart(2,'0');$('timer').textContent=formatTime(g?.remaining??room?.duration??Number($('duration').value));
   const entity=role==='bar'?g?.bar:g?.blocks.find(b=>b.id===myId);
   const alive=role==='bar'||entity?.alive;
   $('arenaHint').textContent=playing?(alive?(role==='bar'?'マウス / ← → で移動 · Q / E スキル':'WASD / 矢印キーで移動 · Q / E スキル'):'撃破されました · 仲間の戦いを観戦中'):'ブロックエリアから逃げ切ろう';
-  for(let i=0;i<2;i++){const cd=entity?.cooldown[i]??0;$(`skill${i}`).disabled=!playing||!alive||cd>0||!connected;$(`cooldown${i}`).textContent=playing?(cd>0?`${cd.toFixed(1)}s`:'READY'): `${skillData[role][i][3]}s CT`;}
+  updateCooldowns();
+}
+function updateCooldowns() {
+  const g = room?.game, playing = room?.phase === 'playing';
+  const entity = role === 'bar' ? g?.bar : g?.blocks.find(b => b.id === myId);
+  const elapsed = playing && connected ? Math.min((performance.now() - snapshotAt) / 1000, .15) : 0;
+  for (let i = 0; i < 2; i++) {
+    const raw = entity?.cooldown[i] ?? 0, cd = Math.max(0, raw - elapsed), total = skillData[role][i][3];
+    const capped = role === 'bar' && i === 0 && g?.balls.length >= 128;
+    const available = playing && connected && (role === 'bar' || entity?.alive) && raw <= 0 && !capped;
+    $(`skill${i}`).disabled = !available;
+    $(`skill${i}`).classList.toggle('ready', available);
+    $(`cooldown${i}`).textContent = playing ? (!connected ? '通信待ち' : role === 'block' && !entity?.alive ? '観戦中' : cd > 0 ? `${cd.toFixed(1)}秒` : capped ? '上限到達' : raw > 0 ? '0.1秒' : '使用可能') : `CD ${total}秒`;
+    $(`cdFill${i}`).style.width = `${playing ? (1 - cd / total) * 100 : 100}%`;
+  }
 }
 async function cast(slot){if($(`skill${slot}`).disabled)return;try{await api('skill',{slot});}catch(e){status(e.message);}}
 $('skill0').onclick=()=>cast(0);$('skill1').onclick=()=>cast(1);
@@ -93,11 +121,40 @@ window.addEventListener('blur',resetInput);document.addEventListener('visibility
 canvas.addEventListener('pointermove',e=>{if(role==='bar'){const r=canvas.getBoundingClientRect();pointerX=(e.clientX-r.left)/r.width*1000;}});
 canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);if(role==='bar'){const r=canvas.getBoundingClientRect();pointerX=(e.clientX-r.left)/r.width*1000;}});
 document.querySelectorAll('[data-dir]').forEach(b=>{b.onpointerdown=e=>{e.preventDefault();b.setPointerCapture(e.pointerId);touchKeys.add(b.dataset.dir);pointerX=undefined;};b.onpointerup=b.onpointercancel=b.onlostpointercapture=()=>touchKeys.delete(b.dataset.dir);});
-setInterval(async()=>{if(room?.phase!=='playing'||!connected||sending||document.hidden)return;const down=d=>keys.has(d)||touchKeys.has(d);const input={x:Number(down('right'))-Number(down('left')),y:Number(down('down'))-Number(down('up')),...(role==='bar'&&pointerX!==undefined?{targetX:pointerX}:{})};const serialized=JSON.stringify(input);if(serialized===lastInput&&Date.now()-lastSent<300)return;lastInput=serialized;lastSent=Date.now();sending=true;try{await api('input',input);}catch{setConnection(false,'再接続中');}finally{sending=false;}},70);
+setInterval(async()=>{if(room?.phase!=='playing'||!connected||sending||document.hidden)return;const input=currentInput();const serialized=JSON.stringify(input);if(serialized===lastInput&&Date.now()-lastSent<200)return;lastInput=serialized;lastSent=Date.now();sending=true;try{await api('input',input);}catch{status('操作の送信に失敗しました。再試行中です。');}finally{sending=false;}},16);
+function displayGame(g, time, dt) {
+  if (!g || room.phase !== 'playing') return g;
+  const alpha = clamp((time - snapshotAt) / 33, 0, 1);
+  const smooth = (next, prev) => prev ? { ...next, x: prev.x + (next.x - prev.x) * alpha, y: prev.y + (next.y - prev.y) * alpha } : next;
+  const oldBlocks = new Map(previousGame?.blocks.map(b => [b.id, b]) ?? []);
+  const oldBalls = new Map(previousGame?.balls.map(b => [b.id, b]) ?? []);
+  const shown = { ...g, bar: smooth(g.bar, previousGame?.bar), blocks: g.blocks.map(b => smooth(b, oldBlocks.get(b.id))), balls: g.balls.map(b => smooth(b, oldBalls.get(b.id))) };
+  const own = role === 'bar' ? g.bar : g.blocks.find(b => b.id === myId);
+  if (!own || (role === 'block' && !own.alive)) return shown;
+  if (!predicted || !connected || Math.hypot(predicted.x - own.x, predicted.y - own.y) > 160) predicted = { x: own.x, y: own.y };
+  const input = connected && !document.hidden && !$('help').open ? currentInput() : { x: 0, y: 0 };
+  const norm = role === 'bar' ? 1 : Math.max(1, Math.hypot(input.x, input.y));
+  const speed = role === 'bar' ? 850 : 290 * (own.ghost > 0 ? 1.8 : 1);
+  predicted.x += input.x / norm * speed * dt;
+  if (role === 'block') predicted.y += input.y / norm * speed * dt;
+  if (Number.isFinite(input.targetX)) predicted.x = input.targetX;
+  else {
+    const correction = 1 - Math.exp(-dt * 9);
+    predicted.x += (own.x - predicted.x) * correction;
+    predicted.y += (own.y - predicted.y) * correction;
+  }
+  predicted.x = clamp(predicted.x, own.w / 2 + (role === 'block' ? 8 : 0), 1000 - own.w / 2 - (role === 'block' ? 8 : 0));
+  predicted.y = role === 'block' ? clamp(predicted.y, 30, 460) : own.y;
+  if (role === 'bar') shown.bar = { ...own, ...predicted };
+  else shown.blocks = shown.blocks.map(b => b.id === myId ? { ...b, ...predicted } : b);
+  return shown;
+}
 function rounded(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);}
 function draw(time){
   ctx.clearRect(0,0,1000,680);
-  const g=room?.game;
+  const dt = Math.min((time - lastDraw) / 1000, .033); lastDraw = time;
+  const g=displayGame(room?.game, time, dt);
+  updateCooldowns();
   const blocks=g?.blocks??previewBlocks;
   ctx.strokeStyle='#64755230';ctx.setLineDash([5,9]);ctx.beginPath();ctx.moveTo(0,488);ctx.lineTo(1000,488);ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle='#64755270';ctx.font='9px monospace';ctx.textAlign='left';ctx.fillText('BLOCK ZONE',12,479);ctx.textAlign='right';ctx.fillText('SURVIVE THE COUNTDOWN',988,479);
@@ -116,6 +173,7 @@ function draw(time){
   ctx.fillStyle='#4b593f';ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText(bar.id===myId&&myId?'YOU':g&&!bar.id?'CPU BAR':'BAR TEAM',bar.x,bar.y+29);
   requestAnimationFrame(draw);
 }
-async function checkHealth(){try{const r=await fetch('/health');setConnection(r.ok,r.ok?'サーバー接続済み':'サーバー未接続');}catch{setConnection(false,'サーバー未接続');}}
+async function checkHealth(){try{const r=await fetch('/health');const health=await r.json();if(health.inviteBase)inviteBase=health.inviteBase;setConnection(r.ok,r.ok?'サーバー接続済み':'サーバー未接続');if(room)$('inviteUrl').value=invitationUrl();}catch{setConnection(false,'サーバー未接続');}}
+setInterval(updateCooldowns,100);
 const invite=new URL(location.href).searchParams.get('room');if(invite){$('joinCode').value=invite.toUpperCase().slice(0,6);role='block';color='#a78bfa';status('招待ルームのコードを入力しました。名前とチームを選んで参加してください。');}
 updateTeam();renderUI();checkHealth();requestAnimationFrame(draw);

@@ -2,6 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { networkInterfaces } from 'node:os';
 import { createGame, tick, useSkill } from './src/game.js';
 
 const rooms = new Map(), sessions = new Map();
@@ -66,7 +67,7 @@ const server = http.createServer(async (req, res) => {
         if (action === 'create') {
           if (rooms.size >= 100) fail('サーバーが混雑しています。しばらくしてからお試しください。');
           let code; do { code = randomBytes(3).toString('hex').toUpperCase(); } while (rooms.has(code));
-          room = { code, host: null, phase: 'lobby', duration: [120, 180, 300].includes(data.duration) ? data.duration : 180, players: new Map(), inputs: new Map(), game: null };
+          room = { code, host: null, phase: 'lobby', duration: [30, 60].includes(data.duration) ? data.duration : 60, players: new Map(), inputs: new Map(), game: null };
         } else {
           room = rooms.get(String(data.code || '').toUpperCase());
           if (!room) fail('ルームが見つかりません。コードを確認してください。');
@@ -103,7 +104,11 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
     const files = { '/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'], '/app.js': ['app.js', 'text/javascript'] };
-    if (req.method === 'GET' && url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size });
+    if (req.method === 'GET' && url.pathname === '/health') {
+      const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+      const address = Object.values(networkInterfaces()).flat().find(n => n.family === 'IPv4' && !n.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(n.address));
+      return json(res, 200, { ok: true, rooms: rooms.size, inviteBase: local && address ? `http://${address.address}:${port}` : null });
+    }
     if (req.method !== 'GET' || !files[url.pathname]) return json(res, 404, { error: 'Not found' });
     const [name, mime] = files[url.pathname];
     const content = await readFile(fileURLToPath(new URL(`./public/${name}`, import.meta.url)));
@@ -121,7 +126,7 @@ setInterval(() => {
       for (let i = 0; i < steps; i++) tick(room.game, room.inputs, dt / steps);
       if (room.game.winner) { room.phase = 'finished'; broadcast(room); }
     }
-    if (frame % 4 === 0 && room.phase === 'playing') broadcast(room);
+    if (frame % 2 === 0 && room.phase === 'playing') broadcast(room);
   }
   frame++;
 }, 1000 / 60).unref();

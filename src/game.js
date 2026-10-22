@@ -4,7 +4,7 @@ export const MAX_BALLS = 128;
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const ball = (x = WIDTH / 2, y = HEIGHT - 80, vx = 180) => ({ x, y, vx, vy: -310, r: 7 });
 
-export function createGame(players, duration = 180, now = Date.now()) {
+export function createGame(players, duration = 60, now = Date.now()) {
   const humans = players.filter(p => p.role === 'block');
   return {
     startedAt: now, remaining: duration, duration, elapsed: 0, winner: null,
@@ -14,7 +14,7 @@ export function createGame(players, duration = 180, now = Date.now()) {
       color: humans[i]?.color ?? '#ffffff', x: 54 + (i % 11) * 89, y: 65 + Math.floor(i / 11) * 38,
       w: 46, h: 20, alive: true, ghost: 0, shield: 0, cooldown: [0, 0], phase: i * 2.4,
     })),
-    balls: [ball()], bombs: [], destroyed: 0,
+    balls: [{ ...ball(), id: 0 }], nextBallId: 1, bombs: [], destroyed: 0,
   };
 }
 
@@ -25,7 +25,7 @@ export function useSkill(game, id, slot) {
   if (!entity || entity.cooldown[slot] > 0) return false;
   if (isBar && slot === 0) {
     if (game.balls.length >= MAX_BALLS) return false;
-    const copies = game.balls.slice(0, MAX_BALLS - game.balls.length).map(b => ({ ...b, vx: -b.vx + (b.vx === 0 ? 120 : 0) }));
+    const copies = game.balls.slice(0, MAX_BALLS - game.balls.length).map(b => ({ ...b, id: game.nextBallId++, vx: -b.vx + (b.vx === 0 ? 120 : 0) }));
     game.balls.push(...copies);
   } else if (isBar) {
     const target = game.balls.find(b => b.y < 450) ?? game.balls[0];
@@ -50,7 +50,7 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
   bar.cooldown = bar.cooldown.map(c => Math.max(0, c - dt));
   const barInput = inputs.get(bar.id);
   if (bar.id && barInput) {
-    bar.x = Number.isFinite(barInput.targetX) ? barInput.targetX : bar.x + barInput.x * 540 * dt;
+    bar.x = Number.isFinite(barInput.targetX) ? barInput.targetX : bar.x + barInput.x * 850 * dt;
   } else if (!bar.id) {
     const target = game.balls.filter(b => b.vy > 0).sort((a, b) => b.y - a.y)[0] ?? game.balls[0];
     if (target) bar.x += clamp(target.x - bar.x, -410 * dt, 410 * dt);
@@ -69,13 +69,20 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
       if (threat) dx = b.x >= threat.x ? 1 : -1;
     } else if (input) { dx = input.x; dy = input.y; }
     const length = Math.max(1, Math.hypot(dx, dy));
-    const speed = (b.cpu ? 48 : 155) * (b.ghost > 0 ? 1.8 : 1);
+    const speed = (b.cpu ? 75 : 290) * (b.ghost > 0 ? 1.8 : 1);
     b.x = clamp(b.x + dx / length * speed * dt, b.w / 2 + 8, WIDTH - b.w / 2 - 8);
     b.y = clamp(b.y + dy / length * speed * dt, 30, 460);
   }
+  // Queue spawned balls until after collision processing to avoid a same-tick chain reaction.
+  const spawned = [];
+  function destroyBlock(b) {
+    b.alive = false; game.destroyed++;
+    const angle = game.destroyed * 2.399963;
+    spawned.push({ id: game.nextBallId++, x: b.x, y: b.y, r: 7, vx: Math.cos(angle) * 260, vy: (game.destroyed % 2 ? 1 : -1) * 310 });
+  }
   for (const bomb of game.bombs) {
     bomb.life -= dt;
-    for (const b of game.blocks) if (b.alive && b.shield <= 0 && intersectsCircle(b, bomb)) { b.alive = false; game.destroyed++; }
+    for (const b of game.blocks) if (b.alive && b.shield <= 0 && intersectsCircle(b, bomb)) destroyBlock(b);
   }
   game.bombs = game.bombs.filter(b => b.life > 0);
   for (const v of game.balls) {
@@ -84,21 +91,22 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
     if (v.x < v.r) { v.x = v.r; v.vx = Math.abs(v.vx); }
     if (v.x > WIDTH - v.r) { v.x = WIDTH - v.r; v.vx = -Math.abs(v.vx); }
     if (v.y < v.r) { v.y = v.r; v.vy = Math.abs(v.vy); }
+    if (v.y > HEIGHT - v.r) { v.y = HEIGHT - v.r; v.vy = -Math.abs(v.vy); }
     if (v.vy > 0 && prevY + v.r <= bar.y - bar.h / 2 && v.y + v.r >= bar.y - bar.h / 2 && Math.abs(v.x - bar.x) <= bar.w / 2 + v.r) {
       const angle = clamp((v.x - bar.x) / (bar.w / 2), -.95, .95) * 1.05;
       v.vx = Math.sin(angle) * 390; v.vy = -Math.cos(angle) * 390; v.y = bar.y - bar.h / 2 - v.r;
     }
     for (const b of game.blocks) {
       if (!b.alive || !intersectsCircle(b, v)) continue;
-      if (b.shield <= 0) { b.alive = false; game.destroyed++; }
+      if (b.shield <= 0) destroyBlock(b);
       if (Math.abs(prevX - b.x) > b.w / 2 + v.r) v.vx *= -1;
       else v.vy *= -1;
-      v.x = prevX; v.y = prevY;
+      v.x = clamp(prevX, v.r, WIDTH - v.r); v.y = clamp(prevY, v.r, HEIGHT - v.r);
       break;
     }
   }
-  game.balls = game.balls.filter(b => b.y < HEIGHT + 20);
-  if (!game.balls.length) game.balls.push(ball(bar.x));
+  // Every defeat adds a ball, even when the shadow skill's 128-ball limit is reached.
+  game.balls.push(...spawned);
   if (game.destroyed === BLOCK_COUNT) game.winner = 'bar';
   else if (game.remaining <= 0) game.winner = 'block';
 }
