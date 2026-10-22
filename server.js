@@ -105,7 +105,8 @@ const server = http.createServer(async (req, res) => {
     }
     const files = { '/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'], '/app.js': ['app.js', 'text/javascript'] };
     if (req.method === 'GET' && url.pathname === '/health') {
-      const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+      const loopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+      const local = loopback && /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(req.headers.host || '');
       const address = Object.values(networkInterfaces()).flat().find(n => n.family === 'IPv4' && !n.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(n.address));
       return json(res, 200, { ok: true, rooms: rooms.size, inviteBase: local && address ? `http://${address.address}:${port}` : null });
     }
