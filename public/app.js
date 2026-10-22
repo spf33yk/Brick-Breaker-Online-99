@@ -1,15 +1,55 @@
 const $ = id => document.getElementById(id);
 const canvas = $('arena'), ctx = canvas.getContext('2d');
 let role = 'bar', color = '#b8f36b', token = null, myId = null, room = null, events = null, connected = false, busy = false;
-let pointerX, keys = new Set(), touchKeys = new Set(), sending = false, lastInput = '', lastSent = 0;
+let pointerX, pointerAim, keys = new Set(), touchKeys = new Set(), sending = false, lastInput = '', lastSent = 0;
 let previousGame = null, snapshotAt = performance.now(), predicted = null, lastDraw = performance.now(), inviteBase = location.origin;
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+let audioContext = null, soundEnabled = localStorage.getItem('soundEnabled') !== 'false';
+function updateSoundButton() {
+  $('soundToggle').textContent = soundEnabled ? '♫ 効果音 ON' : '♫ 効果音 OFF';
+  $('soundToggle').setAttribute('aria-pressed', String(soundEnabled));
+}
+function unlockAudio() {
+  if (!soundEnabled || audioContext) { audioContext?.resume(); return; }
+  const Audio = window.AudioContext || window.webkitAudioContext;
+  if (Audio) { audioContext = new Audio(); audioContext.resume(); }
+}
+document.addEventListener('pointerdown', unlockAudio, { capture: true });
+document.addEventListener('keydown', unlockAudio, { capture: true });
+function tone(startHz, endHz, duration, volume, type = 'sine') {
+  if (!soundEnabled || !audioContext) return;
+  const start = audioContext.currentTime, oscillator = audioContext.createOscillator(), gain = audioContext.createGain();
+  oscillator.type = type; oscillator.frequency.setValueAtTime(startHz, start); oscillator.frequency.exponentialRampToValueAtTime(Math.max(1, endHz), start + duration);
+  gain.gain.setValueAtTime(volume, start); gain.gain.exponentialRampToValueAtTime(.001, start + duration);
+  oscillator.connect(gain).connect(audioContext.destination); oscillator.start(start); oscillator.stop(start + duration);
+}
+function playSound(kind) {
+  if (kind === 'paddle') tone(240, 460, .09, .09, 'triangle');
+  else if (kind === 'block') tone(660, 300, .08, .07, 'square');
+  else if (kind === 'spawn') tone(520, 920, .16, .08, 'sine');
+  else if (kind === 'bomb') { tone(190, 55, .28, .14, 'sawtooth'); setTimeout(() => tone(90, 35, .22, .08, 'triangle'), 65); }
+  else if (kind === 'win') { tone(440, 660, .22, .09); setTimeout(() => tone(660, 880, .25, .09), 130); }
+}
+function playSnapshotSounds(previous, next) {
+  if (!previous || !next || previous.startedAt !== next.startedAt) return;
+  if (next.destroyed > previous.destroyed) playSound('block');
+  if (next.bombs.length > previous.bombs.length) playSound('bomb');
+  const oldBalls = new Map(previous.balls.map(ball => [ball.id, ball]));
+  let paddleHit = false;
+  for (const ball of next.balls) {
+    const old = oldBalls.get(ball.id);
+    if (old && old.vy > 0 && ball.vy < 0 && old.y > 500) paddleHit = true;
+  }
+  if (paddleHit) playSound('paddle');
+  if (next.balls.length > previous.balls.length) playSound('spawn');
+  if (!previous.winner && next.winner) playSound('win');
+}
 function currentInput() {
   const down = d => keys.has(d) || touchKeys.has(d);
   return { x: Number(down('right')) - Number(down('left')), y: Number(down('down')) - Number(down('up')), ...(role === 'bar' && pointerX !== undefined ? { targetX: pointerX } : {}) };
 }
 function invitationUrl() { const url = new URL(inviteBase); if(room) url.searchParams.set('room', room.code); return url.href; }
-const skillData = { bar: [['⧉','影分身','ボールが2倍',20],['✹','ボム','接触した敵を撃破',25]], block: [['♧','ゴースト','10秒間スピードUP',20],['◷','砂時計','5秒間ダメージ無効',30]] };
+const skillData = { bar: [['⧉','影分身','ボールが2倍',20],['✹','ボム','カーソル位置に設置',25]], block: [['♧','ゴースト','10秒間スピードUP',20],['◷','砂時計','5秒間ダメージ無効',30]] };
 const previewBlocks = Array.from({length:99},(_,i)=>({x:54+i%11*89,y:65+Math.floor(i/11)*38,w:46,h:20,alive:true,cpu:true,color:'#fff'}));
 function status(message = '') { $('status').textContent = message; }
 async function api(action, data = {}) {
@@ -47,6 +87,7 @@ function attachEvents() {
   events.onmessage=e=>{
     setConnection(true,'オンライン');
     const next = JSON.parse(e.data);
+    playSnapshotSounds(room?.game, next.game);
     previousGame = room?.game?.startedAt === next.game?.startedAt ? room?.game : null;
     if (!previousGame) predicted = null;
     room = next; snapshotAt = performance.now(); renderUI();
@@ -61,7 +102,7 @@ $('createRoom').onclick=()=>action(()=>enter('create'));
 $('joinForm').onsubmit=e=>{e.preventDefault();action(()=>enter('join'));};
 $('startGame').onclick=()=>action(()=>api('start'));
 $('rematch').onclick=()=>action(()=>api('lobby'));
-$('leaveRoom').onclick=()=>action(async()=>{ try{await api('leave');}finally{events?.close();events=null;token=null;myId=null;room=null;keys.clear();touchKeys.clear();pointerX=undefined;renderUI();status();checkHealth();} });
+$('leaveRoom').onclick=()=>action(async()=>{ try{await api('leave');}finally{events?.close();events=null;token=null;myId=null;room=null;keys.clear();touchKeys.clear();pointerX=undefined;pointerAim=null;renderUI();status();checkHealth();} });
 $('copyCode').onclick=()=>action(async()=>{try{await navigator.clipboard.writeText(invitationUrl());status('招待リンクをコピーしました。同じWi-Fi・LANの相手に共有してください。');}catch{$('inviteUrl').focus();$('inviteUrl').select();status('表示された招待URLをコピーしてください。');}});
 $('duration').onchange=()=>{if(!room)$('timer').textContent=formatTime(Number($('duration').value));};
 $('helpButton').onclick=()=>$('help').showModal();$('closeHelp').onclick=()=>$('help').close();
@@ -94,7 +135,7 @@ function renderUI() {
   $('alive').innerHTML=`${g?99-g.destroyed:99}<small> / 99</small>`;$('destroyed').textContent=String(g?.destroyed??0).padStart(2,'0');$('timer').textContent=formatTime(g?.remaining??room?.duration??Number($('duration').value));
   const entity=role==='bar'?g?.bar:g?.blocks.find(b=>b.id===myId);
   const alive=role==='bar'||entity?.alive;
-  $('arenaHint').textContent=playing?(alive?(role==='bar'?'マウス / ← → で移動 · Q / E スキル':'WASD / 矢印キーで移動 · Q / E スキル'):'撃破されました · 仲間の戦いを観戦中'):'ブロックエリアから逃げ切ろう';
+  $('arenaHint').textContent=playing?(alive?(role==='bar'?'マウスで移動 · Eでカーソル位置にボム':'WASD / 矢印キーで移動 · Q / E スキル'):'撃破されました · 仲間の戦いを観戦中'):'ブロックエリアから逃げ切ろう';
   updateCooldowns();
 }
 function updateCooldowns() {
@@ -111,15 +152,16 @@ function updateCooldowns() {
     $(`cdFill${i}`).style.width = `${playing ? (1 - cd / total) * 100 : 100}%`;
   }
 }
-async function cast(slot){if($(`skill${slot}`).disabled)return;try{await api('skill',{slot});}catch(e){status(e.message);}}
+async function cast(slot){if($(`skill${slot}`).disabled)return;try{const aim=role==='bar'&&slot===1&&pointerAim?{x:pointerAim.x,y:pointerAim.y}:{};await api('skill',{slot,...aim});}catch(e){status(e.message);}}
 $('skill0').onclick=()=>cast(0);$('skill1').onclick=()=>cast(1);
 const keyDirection={ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right',ArrowUp:'up',w:'up',ArrowDown:'down',s:'down'};
 window.addEventListener('keydown',e=>{if(['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)||$('help').open)return;const key=e.key.length===1?e.key.toLowerCase():e.key;if(keyDirection[key]){if(room?.phase==='playing')e.preventDefault();keys.add(keyDirection[key]);pointerX=undefined;}if(!e.repeat&&key==='q')cast(0);if(!e.repeat&&key==='e')cast(1);});
 window.addEventListener('keyup',e=>{const key=e.key.length===1?e.key.toLowerCase():e.key;keys.delete(keyDirection[key]);});
 function resetInput(){keys.clear();touchKeys.clear();pointerX=undefined;}
 window.addEventListener('blur',resetInput);document.addEventListener('visibilitychange',()=>{if(document.hidden)resetInput();});
-canvas.addEventListener('pointermove',e=>{if(role==='bar'){const r=canvas.getBoundingClientRect();pointerX=(e.clientX-r.left)/r.width*1000;}});
-canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);if(role==='bar'){const r=canvas.getBoundingClientRect();pointerX=(e.clientX-r.left)/r.width*1000;}});
+function updatePointer(e){const r=canvas.getBoundingClientRect();pointerAim={x:clamp((e.clientX-r.left)/r.width*1000,0,1000),y:clamp((e.clientY-r.top)/r.height*680,0,680)};if(role==='bar')pointerX=pointerAim.x;}
+canvas.addEventListener('pointermove',updatePointer);
+canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);updatePointer(e);});
 document.querySelectorAll('[data-dir]').forEach(b=>{b.onpointerdown=e=>{e.preventDefault();b.setPointerCapture(e.pointerId);touchKeys.add(b.dataset.dir);pointerX=undefined;};b.onpointerup=b.onpointercancel=b.onlostpointercapture=()=>touchKeys.delete(b.dataset.dir);});
 setInterval(async()=>{if(room?.phase!=='playing'||!connected||sending||document.hidden)return;const input=currentInput();const serialized=JSON.stringify(input);if(serialized===lastInput&&Date.now()-lastSent<200)return;lastInput=serialized;lastSent=Date.now();sending=true;try{await api('input',input);}catch{status('操作の送信に失敗しました。再試行中です。');}finally{sending=false;}},16);
 function displayGame(g, time, dt) {
@@ -166,7 +208,7 @@ function draw(time){
     if(self){ctx.fillStyle=c;ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.fillText('YOU',b.x,b.y-21);}
   }
   const balls=g?.balls??[{x:520+Math.sin(time/1600)*110,y:510+Math.cos(time/1800)*26,r:7,vx:180,vy:-310}];
-  for(const bomb of g?.bombs??[]){ctx.fillStyle='#fb967b25';ctx.strokeStyle='#fb967b';ctx.lineWidth=2;ctx.beginPath();ctx.arc(bomb.x,bomb.y,bomb.r*(.94+Math.sin(time/90)*.06),0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fb967b';ctx.font='26px sans-serif';ctx.textAlign='center';ctx.fillText('✹',bomb.x,bomb.y+9);}
+  for(const bomb of g?.bombs??[]){ctx.fillStyle='#fb967b25';ctx.strokeStyle='#fb967b';ctx.lineWidth=2;ctx.beginPath();ctx.arc(bomb.x,bomb.y,bomb.r,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#fb967b';ctx.font='26px sans-serif';ctx.textAlign='center';ctx.fillText('✹',bomb.x,bomb.y+9);}
   for(const b of balls){ctx.beginPath();ctx.strokeStyle='#b8f36b30';ctx.lineWidth=5;ctx.moveTo(b.x,b.y);ctx.lineTo(b.x-b.vx*.065,b.y-b.vy*.065);ctx.stroke();ctx.beginPath();ctx.fillStyle='#eaffd2';ctx.shadowColor='#b8f36b';ctx.shadowBlur=18;ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;}
   const bar=g?.bar??{x:500,y:625,w:130,h:14};
   const barColor=room?.players.find(p=>p.role==='bar')?.color??'#b8f36b';ctx.fillStyle=barColor;ctx.shadowColor=barColor;ctx.shadowBlur=20;rounded(bar.x-bar.w/2,bar.y-bar.h/2,bar.w,bar.h,5);ctx.fill();ctx.shadowBlur=0;
@@ -176,4 +218,5 @@ function draw(time){
 async function checkHealth(){try{const r=await fetch('/health');const health=await r.json();const localOrigin=['localhost','127.0.0.1','::1'].includes(location.hostname);inviteBase=localOrigin&&health.inviteBase?health.inviteBase:location.origin;setConnection(r.ok,r.ok?'サーバー接続済み':'サーバー未接続');if(room)$('inviteUrl').value=invitationUrl();}catch{setConnection(false,'サーバー未接続');}}
 setInterval(updateCooldowns,100);
 const invite=new URL(location.href).searchParams.get('room');if(invite){$('joinCode').value=invite.toUpperCase().slice(0,6);role='block';color='#a78bfa';status('招待ルームのコードを入力しました。名前とチームを選んで参加してください。');}
+updateSoundButton();$('soundToggle').onclick=()=>{soundEnabled=!soundEnabled;localStorage.setItem('soundEnabled',String(soundEnabled));updateSoundButton();if(soundEnabled)unlockAudio();};
 updateTeam();renderUI();checkHealth();requestAnimationFrame(draw);

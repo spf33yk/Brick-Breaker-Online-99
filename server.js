@@ -99,7 +99,8 @@ const server = http.createServer(async (req, res) => {
         room.inputs.set(p.id, { x: Number.isFinite(x) ? Math.max(-1, Math.min(1, x)) : 0, y: Number.isFinite(y) ? Math.max(-1, Math.min(1, y)) : 0, targetX: typeof data.targetX === 'number' && Number.isFinite(data.targetX) ? Math.max(0, Math.min(1000, data.targetX)) : undefined, at: Date.now() });
       } else if (action === 'skill') {
         if (room.phase !== 'playing') fail('対戦中に使用できます。');
-        if (!useSkill(room.game, p.id, data.slot)) fail('スキルはまだ使用できません。');
+        const aim = { x: data.x, y: data.y };
+        if (!useSkill(room.game, p.id, data.slot, aim)) fail('スキルはまだ使用できません。');
       } else return json(res, 404, { error: '見つかりません。' });
       return json(res, 200, { ok: true });
     }

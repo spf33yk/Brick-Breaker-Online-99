@@ -1,6 +1,8 @@
 export const WIDTH = 1000, HEIGHT = 680, BLOCK_COUNT = 99;
 export const COOLDOWNS = { bar: [20, 25], block: [20, 30] };
 export const MAX_BALLS = 128;
+const BALL_DROP_CHANCE = 0.12;
+const BOMB_RADIUS = 90;
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 const ball = (x = WIDTH / 2, y = HEIGHT - 80, vx = 180) => ({ x, y, vx, vy: -310, r: 7 });
 
@@ -18,7 +20,7 @@ export function createGame(players, duration = 60, now = Date.now()) {
   };
 }
 
-export function useSkill(game, id, slot) {
+export function useSkill(game, id, slot, aim = {}) {
   if (game.winner || ![0, 1].includes(slot)) return false;
   const isBar = game.bar.id === id;
   const entity = isBar ? game.bar : game.blocks.find(b => b.id === id && b.alive);
@@ -28,8 +30,9 @@ export function useSkill(game, id, slot) {
     const copies = game.balls.slice(0, MAX_BALLS - game.balls.length).map(b => ({ ...b, id: game.nextBallId++, vx: -b.vx + (b.vx === 0 ? 120 : 0) }));
     game.balls.push(...copies);
   } else if (isBar) {
-    const target = game.balls.find(b => b.y < 450) ?? game.balls[0];
-    game.bombs.push({ x: clamp(target?.x ?? game.bar.x, 60, 940), y: clamp(target?.y ?? 240, 60, 430), r: 78, life: 4 });
+    const x = Number.isFinite(aim.x) ? aim.x : game.bar.x;
+    const y = Number.isFinite(aim.y) ? aim.y : 240;
+    game.bombs.push({ x: clamp(x, 0, WIDTH), y: clamp(y, 0, HEIGHT), r: BOMB_RADIUS, life: 4 });
   } else if (slot === 0) entity.ghost = 10;
   else entity.shield = 5;
   entity.cooldown[slot] = COOLDOWNS[isBar ? 'bar' : 'block'][slot];
@@ -73,8 +76,14 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
     b.x = clamp(b.x + dx / length * speed * dt, b.w / 2 + 8, WIDTH - b.w / 2 - 8);
     b.y = clamp(b.y + dy / length * speed * dt, 30, 460);
   }
+  const spawned = [];
   function destroyBlock(b) {
     b.alive = false; game.destroyed++;
+    if (game.balls.length + spawned.length < MAX_BALLS && Math.random() < BALL_DROP_CHANCE) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 350;
+      spawned.push({ id: game.nextBallId++, x: b.x, y: b.y, r: 7, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed });
+    }
   }
   for (const bomb of game.bombs) {
     bomb.life -= dt;
@@ -90,7 +99,8 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
     if (v.y > HEIGHT - v.r) { v.y = HEIGHT - v.r; v.vy = -Math.abs(v.vy); }
     if (v.vy > 0 && prevY + v.r <= bar.y - bar.h / 2 && v.y + v.r >= bar.y - bar.h / 2 && Math.abs(v.x - bar.x) <= bar.w / 2 + v.r) {
       const angle = clamp((v.x - bar.x) / (bar.w / 2), -.95, .95) * 1.05;
-      v.vx = Math.sin(angle) * 390; v.vy = -Math.cos(angle) * 390; v.y = bar.y - bar.h / 2 - v.r;
+      const speed = Math.min(Math.hypot(v.vx, v.vy) * 1.08 + 12, 720);
+      v.vx = Math.sin(angle) * speed; v.vy = -Math.cos(angle) * speed; v.y = bar.y - bar.h / 2 - v.r;
     }
     for (const b of game.blocks) {
       if (!b.alive || !intersectsCircle(b, v)) continue;
@@ -101,6 +111,7 @@ export function tick(game, inputs = new Map(), dt = 1 / 60) {
       break;
     }
   }
+  game.balls.push(...spawned);
   if (game.destroyed === BLOCK_COUNT) game.winner = 'bar';
   else if (game.remaining <= 0) game.winner = 'block';
 }

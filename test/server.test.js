@@ -26,6 +26,7 @@ test('online rooms: join, synchronized events, capacity, authorization, start, s
   assert.equal((await api('profile',{role:'block'},host.token)).status,400);
   assert.equal((await api('skill',{slot:0},host.token)).status,200);assert.equal((await api('skill',{slot:0},host.token)).status,400);
   const state=await gs.next(s=>s.game.balls.length===2);assert.equal(state.game.balls.length,2);
+  assert.equal((await api('skill',{slot:1,x:123,y:234},host.token)).status,200);const bombState=await hs.next(s=>s.game.bombs.length===1);assert.equal(bombState.game.bombs[0].x,123);assert.equal(bombState.game.bombs[0].y,234);assert.equal(bombState.game.bombs[0].r,90);
   assert.equal((await api('leave',{},host.token)).status,200);
   const transfer=await gs.next(s=>s.host===guest.id);assert.equal(transfer.game.bar.id,null);assert.equal(transfer.players.length,1);
   assert.equal((await api('leave',{},guest.token)).status,200);assert.equal((await fetch(`${base}/health`).then(r=>r.json())).rooms,0);
