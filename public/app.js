@@ -173,7 +173,7 @@ function draw(time){
   ctx.fillStyle='#4b593f';ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText(bar.id===myId&&myId?'YOU':g&&!bar.id?'CPU BAR':'BAR TEAM',bar.x,bar.y+29);
   requestAnimationFrame(draw);
 }
-async function checkHealth(){try{const r=await fetch('/health');const health=await r.json();if(health.inviteBase)inviteBase=health.inviteBase;setConnection(r.ok,r.ok?'サーバー接続済み':'サーバー未接続');if(room)$('inviteUrl').value=invitationUrl();}catch{setConnection(false,'サーバー未接続');}}
+async function checkHealth(){try{const r=await fetch('/health');const health=await r.json();const localOrigin=['localhost','127.0.0.1','::1'].includes(location.hostname);inviteBase=localOrigin&&health.inviteBase?health.inviteBase:location.origin;setConnection(r.ok,r.ok?'サーバー接続済み':'サーバー未接続');if(room)$('inviteUrl').value=invitationUrl();}catch{setConnection(false,'サーバー未接続');}}
 setInterval(updateCooldowns,100);
 const invite=new URL(location.href).searchParams.get('room');if(invite){$('joinCode').value=invite.toUpperCase().slice(0,6);role='block';color='#a78bfa';status('招待ルームのコードを入力しました。名前とチームを選んで参加してください。');}
 updateTeam();renderUI();checkHealth();requestAnimationFrame(draw);

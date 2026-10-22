@@ -106,7 +106,9 @@ const server = http.createServer(async (req, res) => {
     const files = { '/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'], '/app.js': ['app.js', 'text/javascript'] };
     if (req.method === 'GET' && url.pathname === '/health') {
       const loopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
-      const local = loopback && /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(req.headers.host || '');
+      const forwarded = req.headers['x-forwarded-host'] || req.headers['x-forwarded-proto'] || req.headers['x-forwarded-for'];
+      const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+      const local = loopback && !forwarded && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
       const address = Object.values(networkInterfaces()).flat().find(n => n.family === 'IPv4' && !n.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(n.address));
       return json(res, 200, { ok: true, rooms: rooms.size, inviteBase: local && address ? `http://${address.address}:${port}` : null });
     }
